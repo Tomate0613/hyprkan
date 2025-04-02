@@ -1,0 +1,552 @@
+#!/usr/bin/env python
+
+"""
+kanata Layer Switcher for Hyprland
+
+This script dynamically switches keyboard layers based on active window class and title.
+It listens for Hyprland window events and updates kanata's layer accordingly.
+
+Usage:
+    python hyprkan [options]
+
+Dependencies:
+- Python 3.x
+- kanata (keyboard remapper)
+"""
+
+import os
+import socket
+import json
+import time
+import subprocess
+import argparse
+import sys
+import re
+import threading
+from datetime import datetime
+
+SCRIPT_VERSION = "1.0.0"
+
+HOME = os.getenv("HOME")
+RUNTIME_DIR = os.getenv("XDG_RUNTIME_DIR")
+INSTANCE_SIG = os.getenv("HYPRLAND_INSTANCE_SIGNATURE")
+HYPRLAND_SOCKET = f"{RUNTIME_DIR}/hypr/{INSTANCE_SIG}/.socket.sock"
+HYPRLAND_SOCKET2 = f"{RUNTIME_DIR}/hypr/{INSTANCE_SIG}/.socket2.sock"
+DEFAULT_CONFIG_PATH = os.path.join(HOME, ".config/kanata/apps.json")
+
+
+# ANSI color codes
+GREEN = "\033[32m"
+BLUE = "\033[34m"
+YELLOW = "\033[33m"
+RED = "\033[31m"
+RESET = "\033[0m"
+
+
+def parse_args():
+    """Parse command-line arguments."""
+    parser = argparse.ArgumentParser(
+        description="kanata Layer Switcher based on Hyprland window events."
+    )
+    parser.add_argument(
+        "-c",
+        "--config",
+        type=str,
+        default=DEFAULT_CONFIG_PATH,
+        help="Path to the JSON configuration file (default: ~/.config/kanata/apps.json)",
+    )
+    parser.add_argument(
+        "-q",
+        "--quiet",
+        action="store_true",
+        help="Suppress non-essential output (only errors are shown)",
+    )
+    parser.add_argument(
+        "-p",
+        "--port",
+        type=str,
+        default="127.0.0.1:10000",
+        help="kanata server port (e.g., 10000) or full address "
+        "(e.g., 127.0.0.1:10000, default: 127.0.0.1:10000)",
+    )
+    parser.add_argument(
+        "-d",
+        "--debug",
+        action="store_true",
+        help="Enable debug mode",
+    )
+    parser.add_argument(
+        "-v",
+        "--version",
+        action="version",
+        version=f"hyprkan {SCRIPT_VERSION}",
+        help="Show hyprkan version",
+    )
+    return parser.parse_args()
+
+
+def log(message, level="info"):
+    """Logs a message with a specified level (info, debug, warning, error); exits on 'error'."""
+
+    levels = {
+        "info": f"{BLUE}[INFO]{RESET}",
+        "debug": f"{GREEN}[DEBUG]{RESET}",
+        "warning": f"{YELLOW}[WARN]{RESET}",
+        "error": f"{RED}[ERROR]{RESET}",
+        "layer_change": f"{GREEN}[LAYER]{RESET}",
+    }
+
+    log_level = levels.get(level, levels["info"])
+    current_time = datetime.now().strftime("%H:%M:%S.%f")[:-2]
+    formatted_message = f"{current_time} {log_level} {message}"
+
+    if level == "debug":
+        if args.debug:
+            print(formatted_message)
+    elif level == "error" or not args.quiet:
+        print(formatted_message)
+
+
+def parse_host_port(host_port: str):
+    """Parses 'host:port' or 'port', defaulting host to '192.168.1.1' if not provided."""
+    if ":" not in host_port:
+        host = "192.168.1.1"
+        port = int(host_port)
+        log(
+            f"No ':' found, defaulting to host: {host} and port: {port}",
+            "debug",
+        )
+    else:
+        host, port = host_port.rsplit(":", 1)
+        if not host:
+            host = "192.168.1.1"
+        port = int(port)
+        log(f"Parsed host: {host}, port: {port}", "debug")
+
+    log(f"kanata address is set to {YELLOW}{host}:{port}{RESET}")
+    return host, port
+
+
+def validate_port():
+    """
+    Validates if the input is a valid port number or an IP:PORT combination.
+    Raises a ValueError if the input is invalid.
+    """
+    port_pattern = re.compile(r"^(\d{1,5})$")
+    ip_port_pattern = re.compile(r"^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}):(\d{1,5})$")
+
+    log(f"Validating port: {args.port}", "debug")
+
+    port_match = port_pattern.fullmatch(args.port)
+    ip_port_match = ip_port_pattern.fullmatch(args.port)
+
+    def is_valid_port(port: str) -> bool:
+        """Check if the port is within the valid range."""
+        return port.isdigit() and 0 < int(port) <= 65535
+
+    if port_match:
+        log(f"Matched port number: {port_match.group(1)}", "debug")
+        if is_valid_port(port_match.group(1)):
+            log(f"Port {port_match.group(1)} is valid.", "debug")
+            return
+
+    if ip_port_match:
+        ip, port = ip_port_match.groups()
+        log(f"Matched IP:PORT - IP: {ip}, Port: {port}", "debug")
+        if is_valid_port(port):
+            octets = ip.split(".")
+            if all(0 <= int(octet) <= 255 for octet in octets):
+                log(f"IP address {ip} is valid.", "debug")
+                return
+
+    log(
+        f"Invalid value {RED}{args.port}{RESET} for {GREEN}--port{RESET} "
+        f"<{YELLOW}PORT{RESET} or {YELLOW}IP:PORT{RESET}>'.\n        "
+        f"Please specify either a port number, e.g. {YELLOW}8081{RESET}, or "
+        f"an address, e.g. {YELLOW}127.0.0.1:8081{RESET}.",
+        "error",
+    )
+    sys.exit(1)
+
+
+def validate_hyprland_sockets():
+    """Validate the paths to both Hyprland sockets based on HYPRLAND_INSTANCE_SIGNATURE."""
+    if not INSTANCE_SIG:
+        log("HYPRLAND_INSTANCE_SIGNATURE is not set.", "error")
+        sys.exit(1)
+
+    socket_paths = [HYPRLAND_SOCKET, HYPRLAND_SOCKET2]
+
+    for socket_path in socket_paths:
+        if not os.path.exists(socket_path):
+            log(f"Hyprland socket not found at {socket_path}", "error")
+            sys.exit(1)
+        log(f"Hyprland socket path is valid: {socket_path}", "debug")
+
+
+def validate_config():
+    """Validates the structure of the configuration file."""
+
+    allowed_top_keys = {"base", "exec", "rules"}
+    required_top_keys = {"rules"}
+
+    allowed_rule_keys = {"class", "title", "layer"}
+    required_rule_keys = {"layer"}
+
+    # Check for missing required top-level keys
+    missing_top_keys = required_top_keys - CONFIG.keys()
+    if missing_top_keys:
+        log(
+            f"Configuration file {YELLOW}{args.config}{RESET} is missing required field(s): "
+            f"{RED}{', '.join(missing_top_keys)}{RESET}.",
+            "error",
+        )
+        sys.exit(1)
+
+    # Check for unexpected top-level keys
+    unexpected_top_keys = CONFIG.keys() - allowed_top_keys
+    if unexpected_top_keys:
+        log(
+            f"Configuration file {YELLOW}{args.config}{RESET} contains unexpected field(s): "
+            f"{RED}{', '.join(unexpected_top_keys)}{RESET}. Allowed fields: "
+            f"{GREEN}{', '.join(allowed_top_keys)}{RESET}.",
+            "error",
+        )
+        sys.exit(1)
+
+    if not isinstance(CONFIG["rules"], list):
+        log(
+            f"'rules' in {YELLOW}{args.config}{RESET} must be a list of rule objects.",
+            "error",
+        )
+        sys.exit(1)
+
+    for rule in CONFIG["rules"]:
+        # Check for missing required rule keys
+        missing_rule_keys = required_rule_keys - rule.keys()
+        if missing_rule_keys:
+            log(
+                f"Rule in {YELLOW}{args.config}{RESET} is missing required field(s): "
+                f"{RED}{', '.join(missing_rule_keys)}{RESET}.",
+                "error",
+            )
+            sys.exit(1)
+
+        # Check for unexpected rule keys
+        unexpected_rule_keys = rule.keys() - allowed_rule_keys
+        if unexpected_rule_keys:
+            log(
+                f"Rule in {YELLOW}{args.config}{RESET} contains unexpected field(s): "
+                f"{RED}{', '.join(unexpected_rule_keys)}{RESET}. Allowed fields: "
+                f"{GREEN}{', '.join(allowed_rule_keys)}{RESET}.",
+                "error",
+            )
+            sys.exit(1)
+
+    log(f"Configuration {args.config} is valid.")
+
+
+def get_base_layer():
+    """Get the base layer from the configuration."""
+    log("Checking for base layer in configuration.", "debug")
+
+    if "base" in CONFIG:
+        base_layer = CONFIG["base"]
+        log(f"Found base layer: {YELLOW}{base_layer}{RESET}", "debug")
+        log(f"Base layer: {YELLOW}{base_layer}{RESET}")
+        return base_layer
+
+    log("No base layer found in configuration.", "debug")
+
+    log(
+        f"No base layer provided in the configuration file {YELLOW}{args.config}{RESET}",
+        "warning",
+    )
+    log(
+        "Without a base layer, the active layer won't change when switching "
+        "between apps that don't have a specific layer.",
+        "warning",
+    )
+    return None
+
+
+def get_cmd():
+    """Get the execution command from the configuration."""
+    log("Checking for base layer in configuration.", "debug")
+
+    if "exec" in CONFIG:
+        cmd = CONFIG["exec"]
+        log(f"Execution command found: {YELLOW}{cmd}{RESET}", "warning")
+        return cmd
+
+    log("No execution command found in configuration.", "debug")
+
+    return None
+
+
+def load_config():
+    """Load layer rules from a JSON file if it exists."""
+    if os.path.exists(args.config):
+        try:
+            with open(args.config, "r", encoding="utf-8") as file:
+                log(f"Loaded configuration file from {YELLOW}{args.config}{RESET}")
+                return json.load(file)
+        except json.JSONDecodeError as e:
+            log(
+                f"Failed to decode JSON from {YELLOW}{args.config}{RESET}: {e}",
+                "error",
+            )
+            sys.exit(1)
+    else:
+        log(f"Configuration file not found: {YELLOW}{args.config}{RESET}", "error")
+        sys.exit(1)
+
+
+def print_table(headers, rows):
+    """Print a dynamic table with headers and rows."""
+
+    if not args.debug:
+        return
+
+    # Calculate column widths based on the longest value in each column
+    column_widths = [
+        max(len(str(item)) for item in column) for column in zip(*rows, headers)
+    ]
+
+    # Print header
+    header_row = "  ".join(
+        f"{header:<{column_widths[i]}}" for i, header in enumerate(headers)
+    )
+    print(f"{'━' * len(header_row)}")
+    print(header_row)
+    print(f"{'━' * len(header_row)}")
+
+    # Print each row
+    for row in rows:
+        print("  ".join(f"{str(row[i]):<{column_widths[i]}}" for i in range(len(row))))
+    print(f"{'─' * len(header_row)}")
+
+
+def get_layer(win_info):
+    """Determine kanata layer based on window class and title."""
+
+    active_win_class = win_info.get("class", "*")
+    active_win_title = win_info.get("title", "*")
+
+    log(
+        f"Received window info: class='{active_win_class}', title='{active_win_title}'",
+        "debug",
+    )
+
+    headers = ["? Match", "Active Window", "Rule Information"]
+    rows = []
+
+    # Look for a specific match in the layers
+    for rule in CONFIG["rules"]:
+        rule_class = rule.get("class", "*")
+        rule_title = rule.get("title", "*")
+
+        if rule_class != "*":
+            rule_class = f".*{rule_class}.*"
+        if rule_title != "*":
+            rule_title = f".*{rule_title}.*"
+
+        class_match = rule_class == "*" or re.match(rule_class, active_win_class)
+        title_match = rule_title == "*" or re.match(rule_title, active_win_title)
+
+        if args.debug:
+            class_match_symbol = "✔" if class_match else "✘"
+            title_match_symbol = "✔" if title_match else "✘"
+
+            rows.append([f"{class_match_symbol} class", active_win_class, rule_class])
+            rows.append(
+                [f"{title_match_symbol} title", active_win_title, f"{rule_title}\n"]
+            )
+
+        log(f"Evaluating rule: {rule}", "debug")
+
+        if class_match and title_match:
+            print_table(headers, rows)
+            log(f"Matching rule found: {rule}", "debug")
+            return rule["layer"]
+
+    print_table(headers, rows)
+
+    base_layer = BASE_LAYER
+
+    if base_layer:
+        log(f"Resolved base layer: {base_layer}", "debug")
+        return base_layer
+
+    log("No base layer found. Returning None.", "debug")
+    return None
+
+
+def listen_for_events():
+    """Keep listening to the Hyprland socket and change kanata layer."""
+    last_win_title = None
+    last_layer = None
+
+    log(f"Listening for Hyprland events on socket: {YELLOW}{HYPRLAND_SOCKET2}{RESET}")
+
+    with subprocess.Popen(
+        ["socat", "-U", "-", f"UNIX-CONNECT:{HYPRLAND_SOCKET2}"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    ) as pipe:
+        while True:
+            event = pipe.stdout.readline().strip()
+            if not event:  # No new event received, continue listening
+                continue
+
+            active_win_info = fetch_active_win_info()
+            if active_win_info:
+                active_win_class = active_win_info["class"]
+                active_win_title = active_win_info["title"]
+
+                log(
+                    f"Extracted window info: class='{active_win_class}', "
+                    f"title='{active_win_title}'",
+                    "debug",
+                )
+
+                if active_win_title != last_win_title:
+                    current_layer = get_layer(active_win_info)
+                    log(
+                        f"Determined layer: {current_layer} (previous: {last_layer})",
+                        "debug",
+                    )
+
+                    if current_layer and current_layer != last_layer:
+                        last_win_title = active_win_title
+                        last_layer = current_layer
+
+                        if switch_layer(current_layer):
+                            os.environ["CURRENT_LAYER"] = current_layer
+                            run_subprocess()
+
+            else:
+                log("Failed to extract window info from event", "debug")
+
+
+def switch_layer(new_layer):
+    """Switch the kanata layer by sending a command to the kanata TCP server."""
+
+    try:
+        log(f"Attempting to switch layer to '{new_layer}'...", "debug")
+
+        # Create a TCP socket and connect to the kanata server
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
+            log(
+                f"Debug: Connecting to kanata server at {kanata_HOST}:{kanata_PORT}...",
+                "debug",
+            )
+
+            client.settimeout(5)
+
+            try:
+                client.connect((kanata_HOST, kanata_PORT))
+                log("Debug: Successfully connected to kanata server.", "debug")
+            except socket.timeout:
+                log("kanata Error: Connection attempt timed out.", "error")
+                return False
+            except socket.error as e:
+                log(f"kanata Error: Connection failed: {e}", "error")
+                return False
+
+            command = f'{{"ChangeLayer":{{"new":"{new_layer}"}}}}\n'
+            log(f"Sending command: {command}", "debug")
+
+            sent = client.send(command.encode("utf-8"))
+
+            if sent == 0:
+                log("kanata Error: Failed to send layer switch command", "error")
+                return False
+
+            log("Debug: Command sent successfully.", "debug")
+
+            # Shutdown the connection after sending the command
+            client.shutdown(socket.SHUT_WR)
+            log("Debug: Shutdown the socket for writing.", "debug")
+
+            # Delay to prevent server from crashing due to fast closure
+            time.sleep(0.1)
+
+    except socket.error as e:
+        log(f"kanata Error: {e}", "error")
+        return False
+
+    log(f"Switched layer to {YELLOW}{new_layer}{RESET}.")
+    return True
+
+
+def fetch_active_win_info():
+    """Fetch and return the class and title of the active window from Hyprland socket."""
+
+    log(f"Connecting to socket at {HYPRLAND_SOCKET}", "debug")
+
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+        sock.connect(HYPRLAND_SOCKET)
+        log("Connected to socket successfully", "debug")
+
+        command = "j/activewindow"  # JSON output for activewindow
+        log(f"Sending command: {command}", "debug")
+
+        sock.send(command.encode("utf-8"))
+        response = sock.recv(4096).decode("utf-8")
+
+        log(f"Received response: {response}", "debug")
+
+        win_info = json.loads(response)
+
+        class_name = win_info.get("class", "*")
+        title = win_info.get("title", "*")
+
+        log(f"Extracted class: {class_name}, title: {title}", "debug")
+
+        return {"class": class_name, "title": title}
+
+
+def run_subprocess():
+    """Execute the global CMD command in background."""
+
+    def background_task():
+        if CMD:
+            try:
+                subprocess.run(
+                    CMD, shell=True, capture_output=True, text=True, check=True
+                )
+            except subprocess.CalledProcessError as e:
+                log(f"Error occurred while running command: {e}", "error")
+                log(f"{e.stderr}", "error")
+                sys.exit(1)
+
+    # Create and start a background thread
+    thread = threading.Thread(target=background_task)
+    thread.start()
+
+
+def main():
+    """Main function to handle argument parsing and logic."""
+    global args, kanata_HOST, kanata_PORT, CONFIG, BASE_LAYER, CMD
+
+    args = parse_args()
+    kanata_PORT = args.port
+
+    validate_port()
+
+    kanata_HOST, kanata_PORT = parse_host_port(args.port)
+    CONFIG = load_config()
+
+    validate_config()
+
+    BASE_LAYER = get_base_layer()
+    CMD = get_cmd()
+
+    validate_hyprland_sockets()
+    listen_for_events()
+
+
+if __name__ == "__main__":
+    main()
