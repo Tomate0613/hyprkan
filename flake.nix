@@ -10,7 +10,7 @@
     {
       nixpkgs,
       flake-utils,
-      ...
+      self,
     }:
     flake-utils.lib.eachDefaultSystem (
       system:
@@ -19,7 +19,7 @@
       in
       {
         packages.default = pkgs.writeShellApplication {
-          name = "my-script";
+          name = "hyprkan";
 
           runtimeInputs = with pkgs; [ socat ];
 
@@ -28,5 +28,51 @@
           '';
         };
       }
-    );
+    )
+    // {
+      nixosModules.default =
+        {
+          config,
+          lib,
+          pkgs,
+          ...
+        }:
+        with lib;
+        {
+          options.services.hyprkan = {
+            enable = mkEnableOption "Hyprkan Layer Switcher";
+
+            config = mkOption {
+              type = types.str;
+              default = "";
+              description = "Configuration for hyprkan";
+            };
+          };
+
+          config = mkIf config.services.hyprkan.enable {
+
+            systemd.user.services.hyprkan = {
+              description = "Hyprkan Layer Switcher";
+              wantedBy = [ "graphical-session.target" ];
+              after = [ "graphical-session.target" ];
+
+              serviceConfig =
+                let
+                  hyprkanConfig = pkgs.writeTextFile {
+                    name = "apps.json";
+                    text = config.services.hyprkan.config;
+                  };
+                in
+                {
+                  ExecStart = ''
+                    ${self.packages.${pkgs.system}.default}/bin/hyprkan -c ${hyprkanConfig}
+                  '';
+                  Restart = "on-failure";
+                  RestartSec = 5;
+                  Type = "simple";
+                };
+            };
+          };
+        };
+    };
 }
