@@ -2,7 +2,7 @@
 
 # Hyprkan ⌨️
 
-A Linux app-aware layer switcher that dynamically changes [Kanata](https://github.com/jtroo/kanata)'s keyboard layers based on the focused window.
+A Linux app-aware layer switcher that dynamically changes [Kanata](https://github.com/jtroo/kanata)'s layers based on the focused window.
 
 ## Table of Contents
 
