@@ -803,7 +803,7 @@ def setup_signals(kanata):
 def parse_args():
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
-        description="kanata Layer Switcher based on Hyprland window events."
+        description="App-aware kanata Layer Switcher based on active window events."
     )
     parser.add_argument(
         "--log-level",
