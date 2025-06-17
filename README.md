@@ -68,6 +68,7 @@ Here is a list of available options:
   Set logging level to DEBUG (overrides `--log`)
 
 - `--set-mouse X Y`
+  Set mouse position to (X, Y) and exit
 
   > **⚠️ Warning:** This option is not supported on Linux as of Kanata v1.8.1.
 
