@@ -59,7 +59,7 @@ Here is a list of available options:
   Show this help message and exit
 
 - `--log-level {DEBUG,INFO,WARNING,ERROR}`  
-  Set logging level (default: WARNING)
+  Set logging level (default: `WARNING`)
 
 - `-q, --quiet`  
   Set logging level to ERROR (overrides `--log`)
@@ -70,7 +70,7 @@ Here is a list of available options:
 - `--set-mouse X Y`
 
   > **⚠️ Warning:**  
-  > This command is not supported on Linux as of Kanata v1.8.1.  
+  > This command is not supported on Linux as of Kanata v1.8.1.
 
 - `--current-layer-name`  
   Print the current active Kanata layer and exit
@@ -79,7 +79,7 @@ Here is a list of available options:
   Print detailed info about the current active Kanata layer and exit
 
 - `--fake-key KEY_NAME ACTION`  
-  Send ActOnFakeKey with (KEY, ACTION), where ACTION is one of: Press, Release, Tap, Toggle.
+  Trigger a [virtual keys](https://jtroo.github.io/config.html#virtual-keys) action and exit
 
 - `--change_layer LAYER`  
   Switch to the specified layer and exit
@@ -88,7 +88,7 @@ Here is a list of available options:
   Print kanata layers as JSON and exit
 
 - `-p, --port PORT`  
-  Kanata server port (e.g., 10000) or full address (e.g., 127.0.0.1:10000)
+  Kanata server port (e.g., `10000`) or full address (e.g., 127.0.0.1:`10000`)
 
 - `-c, --config PATH`  
   Path to the JSON configuration file (default: `$XDG_CONFIG_HOME/apps.json`)
