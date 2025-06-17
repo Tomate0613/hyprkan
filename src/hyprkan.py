@@ -667,10 +667,10 @@ class X11(WMBaseListener):
                 event = self.disp.next_event()
                 if (
                     event.type == self.X.PropertyNotify
-                    and event.atom == self.errors["NET_ACTIVE_WINDOW"]
+                    and event.atom == self.atoms.NET_ACTIVE_WINDOW
                 ):
                     window_id_prop = self.root.get_full_property(
-                        self.errors["NET_ACTIVE_WINDOW"], self.X.AnyPropertyType
+                        self.atoms.NET_ACTIVE_WINDOW, self.X.AnyPropertyType
                     )
                     window_id = (
                         window_id_prop.value[0]
