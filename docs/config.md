@@ -48,7 +48,7 @@ Let’s say you want to automatically switch to a specific Kanata layer when the
 ```
 
 > [!NOTE]
-> Use `--current-window [seconds]` to print the current window's class and title.
+> Use `--current-window-info [seconds]` to print the current window's class and title.
 
 ## Matching Behavior
 

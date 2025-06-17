@@ -877,7 +877,7 @@ def parse_args():
     )
     parser.add_argument(
         "-w",
-        "--win",
+        "--current-window-info",
         type=int,
         nargs="?",
         const=0,
@@ -910,8 +910,8 @@ def handle_cli_commands(args, kanata, session) -> bool:
         print(kanata.get_current_layer_name())
     elif args.current_layer_info:
         print(kanata.get_current_layer_info())
-    elif args.win is not None:
-        sleep(args.win)
+    elif args.current_window_info is not None:
+        sleep(args.current_window_info)
         print(session.get_active_window())
     else:
         return False

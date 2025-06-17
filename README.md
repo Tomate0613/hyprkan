@@ -93,7 +93,7 @@ Here is a list of available options:
 - `-c, --config PATH`  
   Path to the JSON configuration file (default: `$XDG_CONFIG_HOME/apps.json`)
 
-- `-w, --win [SECONDS]`  
+- `-w, --current-window-info [SECONDS]`  
   Print current window info and exit (optionally wait SECONDS before checking)
 
 - `-v, --version`  
