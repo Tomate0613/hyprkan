@@ -91,7 +91,7 @@ Here is a list of available options:
   Kanata server port (e.g., `10000`) or full address (e.g., 127.0.0.1:`10000`)
 
 - `-c, --config PATH`  
-  Path to the JSON configuration file (default: `$XDG_CONFIG_HOME/apps.json`)
+  Path to the JSON configuration file (default: `$XDG_CONFIG_HOME/kanata/apps.json`)
 
 - `-w, --current-window-info [SECONDS]`  
   Print current window info and exit (optionally wait SECONDS before checking)

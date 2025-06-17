@@ -872,7 +872,7 @@ def parse_args():
         type=str,
         default=get_config_path(),
         metavar="PATH",
-        help="Path to the JSON configuration file (default: $XDG_CONFIG_HOME/apps.json)",
+        help="Path to the JSON configuration file (default: $XDG_CONFIG_HOME/kanata/apps.json)",
     )
     parser.add_argument(
         "-w",
