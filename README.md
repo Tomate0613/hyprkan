@@ -79,7 +79,7 @@ Here is a list of available options:
   Print detailed info about the current active Kanata layer and exit
 
 - `--fake-key KEY_NAME ACTION`  
-  Trigger a [virtual keys](https://jtroo.github.io/config.html#virtual-keys) action and exit
+  Trigger [virtual keys](https://jtroo.github.io/config.html#virtual-keys) action and exit
 
 - `--change-layer LAYER`  
   Switch to the specified layer and exit
