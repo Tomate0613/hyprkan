@@ -70,7 +70,7 @@ Here is a list of available options:
 - `--set-mouse X Y`
 
   > **⚠️ Warning:**  
-  > This command is not supported on Linux as of Kanata v1.8.1.
+  > This option is not supported on Linux as of Kanata v1.8.1.
 
 - `--current-layer-name`  
   Print the current active Kanata layer and exit
