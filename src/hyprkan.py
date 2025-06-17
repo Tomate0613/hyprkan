@@ -681,7 +681,7 @@ class X11(WMBaseListener):
                         self.last_seen["xid"] = window_id
                         on_focus_callback()
             except (
-                self.errors["ConnectionError"],
+                self.errors["DisplayConnectionError"],
                 self.errors["XError"],
                 self.errors["BadWindow"],
                 IndexError,
