@@ -81,7 +81,7 @@ Here is a list of available options:
 - `--fake-key KEY_NAME ACTION`  
   Trigger a [virtual keys](https://jtroo.github.io/config.html#virtual-keys) action and exit
 
-- `--change_layer LAYER`  
+- `--change-layer LAYER`  
   Switch to the specified layer and exit
 
 - `-l, --layers`  

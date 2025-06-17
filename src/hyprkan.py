@@ -1,7 +1,8 @@
 #!/usr/bin/env python
 
 """
-App-Aware kanata Layer Switcher for Hyprland, Sway, and X11
+App-Aware kanata Layer Switcher for Linux
+
 This script acts as an application-aware keyboard layer switcher for Kanata.
 It monitors the currently focused window and dynamically adjusts Kanata's
 keyboard layer based on the window's class and title.
@@ -14,7 +15,7 @@ Supported Environments:
 Core Features:
 - Per-app Kanata layer switching
 - Run shell commands on window focus
-- Send fake keys or modifiers
+- Send virtual keys to automate input behavior
 - Move mouse to a specific (x, y) position
 
 Usage:
