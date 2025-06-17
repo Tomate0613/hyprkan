@@ -1,46 +1,813 @@
 #!/usr/bin/env python
 
-"""
-kanata Layer Switcher for Hyprland
 
-This script dynamically switches keyboard layers based on active window class and title.
-It listens for Hyprland window events and updates kanata's layer accordingly.
+"""
+
+App-Aware kanata Layer Switcher for Hyprland, Sway, and X11
+
+
+This script acts as an application-aware keyboard layer switcher for Kanata.
+
+It monitors the currently focused window and dynamically adjusts Kanata's
+
+keyboard layer based on the window's class and title.
+
+
+Supported Environments:
+- Hyprland (Wayland)
+
+- Sway (Wayland, via i3ipc)
+
+- X11-based window managers (via python-xlib)
+
+
+Core Features:
+- Per-app Kanata layer switching
+
+- Run shell commands on window focus
+- Send fake keys or modifiers
+- Move mouse to a specific (x, y) position
 
 Usage:
-    python hyprkan [options]
+    hyprkan [options]
 
 Dependencies:
-- Python 3.x
-- kanata (keyboard remapper)
+- Python >= 3.8
+- kanata >= 1.8.1
+- i3ipc (for Sway)
+- python-xlib (for X11)
 """
 
-import os
-import socket
-import json
-import time
-import subprocess
 import argparse
-import sys
+import json
+import logging
+import os
 import re
+import signal
+import socket
+import subprocess
+import sys
 import threading
+from time import sleep
+from dataclasses import dataclass
 from datetime import datetime
-
-SCRIPT_VERSION = "1.0.0"
-
-HOME = os.getenv("HOME")
-RUNTIME_DIR = os.getenv("XDG_RUNTIME_DIR")
-INSTANCE_SIG = os.getenv("HYPRLAND_INSTANCE_SIGNATURE")
-HYPRLAND_SOCKET = f"{RUNTIME_DIR}/hypr/{INSTANCE_SIG}/.socket.sock"
-HYPRLAND_SOCKET2 = f"{RUNTIME_DIR}/hypr/{INSTANCE_SIG}/.socket2.sock"
-DEFAULT_CONFIG_PATH = os.path.join(HOME, ".config/kanata/apps.json")
+from pathlib import Path
+from typing import Literal, NoReturn, Optional, TypedDict, Tuple, Dict, Any, Union
 
 
-# ANSI color codes
-GREEN = "\033[32m"
-BLUE = "\033[34m"
-YELLOW = "\033[33m"
-RED = "\033[31m"
-RESET = "\033[0m"
+SCRIPT_VERSION = "2.0.0"
+
+
+log = logging.getLogger()
+
+
+class Rule(TypedDict, total=False):
+    layer: str
+    cls: str
+    title: str
+    cmd: str
+    fake_key: tuple[str, str]
+    set_mouse: tuple[int, int]
+
+
+class WinInfo(TypedDict):
+    cls: str
+    title: str
+
+
+# pylint: disable=invalid-name
+class utils:
+
+    @staticmethod
+    def is_blank(s: str) -> bool:
+        """Check if a string is empty/whitespace only."""
+        return not s.strip()
+
+    @staticmethod
+    def validate_port(port: Union[int, str]) -> tuple[str, int]:
+        """Validate a port number or an IP:PORT combination and return (host, port)."""
+        port_str = str(port)
+        if utils._is_valid_port(port_str):
+            return ("127.0.0.1", int(port_str))  # default host localhost
+        if utils._is_valid_ip_port(port_str):
+            host, port_part = port_str.split(":")
+            return (host, int(port_part))
+
+        fatal(
+            "Invalid port '%s': Please specify either a port number (e.g., 10000) or "
+            "an IP address with port (e.g., 127.0.0.1:10000).",
+            port,
+        )
+
+    @staticmethod
+    def _is_valid_port(port: Union[int, str]) -> bool:
+        if isinstance(port, int):
+            return 0 < port <= 65535
+        if isinstance(port, str) and port.isdigit():
+            val = int(port)
+            return 0 < val <= 65535
+        return False
+
+    @staticmethod
+    def _is_valid_ip_port(value: str) -> bool:
+        pattern = r"(\d{1,3}(?:\.\d{1,3}){3}):(\d{1,5})"
+        match = re.fullmatch(pattern, value)
+        if not match:
+            return False
+
+        ip, port_str = match.groups()
+        port = int(port_str)
+
+        if not utils._is_valid_port(port):
+            return False
+
+        if ip == "localhost":
+            return True
+
+        octets = ip.split(".")
+        return all(o.isdigit() and 0 <= int(o) <= 255 for o in octets)
+
+    @staticmethod
+    def _run_cmd(cmd: str):
+        """Run a shell command and handle errors."""
+        try:
+            subprocess.run(cmd, shell=True, capture_output=True, text=True, check=True)
+        except subprocess.CalledProcessError as e:
+            fatal("Error occurred while running command: %s\n%s", e, e.stderr)
+
+    @staticmethod
+    def run_cmd_bg(cmd: str):
+        """Execute a shell command in the background."""
+        thread = threading.Thread(target=utils._run_cmd, args=(cmd,))
+        thread.start()
+
+    @staticmethod
+    def require_env(var_name: str) -> str:
+        """Return the value of an environment variable or exit if unset."""
+        value = os.getenv(var_name)
+        if not value:
+            fatal("Required environment variable '%s' is not set.", var_name)
+        return value
+
+    @staticmethod
+    def validate_fake_key(
+        fake_key: tuple[str, str], rule_no: Optional[int]
+    ) -> tuple[str, str]:
+        name, action = fake_key
+        if utils.is_blank(name):
+            fatal("Fake key name must not be blank")
+
+        valid_actions = {"Press", "Release", "Tap", "Toggle"}
+        action = action.capitalize()
+        if action not in valid_actions:
+            actions = ", ".join(valid_actions)
+            if rule_no:
+                msg = f"Invalid config: rule #{rule_no} '{action}' must be one of: {actions}"
+            else:
+                msg = f"Invalid action '{action}'. Must be one of: {actions}"
+            fatal(msg)
+
+        return name, action
+
+
+class Kanata:
+    """TCP client for communicating with kanata."""
+
+    def __init__(self, addr: Tuple[str, int]):
+        self.addr = addr
+        self._client: socket.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._buffer = ""
+        self._connected = False
+
+    def _connect(self):
+        log.debug("Connecting to %s:%s", *self.addr)
+        try:
+            self._client.connect(self.addr)
+            self._client.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            self._client.settimeout(0.5)
+            self._connected = True
+
+            # Send a dummy command to avoid the server doesn't error if the client
+            # closes without sending anything
+            self.get_current_layer_name()
+
+        except socket.error as e:
+            ip, port = self.addr
+            fatal(
+                "Kanata connection error: %s — make sure kanata is running with the -p option "
+                "(e.g. `-p %s` or `-p %s:%s`).",
+                e,
+                port,
+                ip,
+                port,
+            )
+
+    def close(self):
+        """Close the client socket connection gracefully."""
+        if self._client:
+            log.warning("Closing client socket to %s", self.addr)
+            try:
+                self._client.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass  # Socket may already be closed or unconnected
+            self._client.close()
+
+    def _flush_buffer(self):
+        """
+        Flushes any stale complete messages from the socket buffer before
+        sending a new command.
+        """
+        self._client.settimeout(0.01)
+        try:
+            while True:
+                chunk = self._client.recv(1024)
+                if not chunk:
+                    break
+                self._buffer += chunk.decode("utf-8")
+        except socket.timeout:
+            pass
+
+        if "\n" in self._buffer:
+            parts = self._buffer.split("\n")
+            self._buffer = parts[-1]  # Keep only last incomplete piece
+
+    def send(self, cmd: dict) -> Optional[str]:
+        if not self._connected:
+            self._connect()
+        logging.debug("Sending command: %s", cmd)
+        msg = json.dumps(cmd) + "\n"
+
+        self._flush_buffer()  # Discard old responses
+        self._client.sendall(msg.encode("utf-8"))
+        self._client.settimeout(0.05)
+
+        try:
+            while "\n" not in self._buffer:
+                chunk = self._client.recv(1024)
+                if not chunk:
+                    break
+                self._buffer += chunk.decode("utf-8")
+        except socket.timeout:
+            return None
+
+        lines = self._buffer.split("\n")
+        self._buffer = lines[-1]  # Save incomplete part
+
+        for line in lines[:-1]:
+            if line.strip():
+                logging.debug("Received response line: %s", line.strip())
+                return line.strip()
+
+        return None
+
+    def get_current_layer_name(self) -> str:
+        data = self._parse_json_response(self.send({"RequestCurrentLayerName": {}}))
+        return data.get("CurrentLayerName", {}).get("name")
+
+    def get_current_layer_info(self) -> Optional[Dict[str, str]]:
+        data = self._parse_json_response(self.send({"RequestCurrentLayerInfo": {}}))
+        return data.get("CurrentLayerInfo")
+
+    def get_layer_names(self) -> list[str]:
+        data = self._parse_json_response(self.send({"RequestLayerNames": {}}))
+        return data.get("LayerNames", {}).get("names")
+
+    def change_layer(self, layer: str) -> bool:
+        if layer == self.get_current_layer_name():
+            log.debug("Layer '%s' is already active.", layer)
+            return False
+        self._parse_json_response(self.send({"ChangeLayer": {"new": layer}}))
+        log.info("Switched to layer '%s'", layer)
+        return True
+
+    def act_on_fake_key(self, fake_key: tuple[str, str]) -> None:
+        name, action = utils.validate_fake_key(fake_key, rule_no=None)
+        self._parse_json_response(
+            self.send({"ActOnFakeKey": {"name": name, "action": action}})
+        )
+
+    def set_mouse(self, pos: tuple[int, int]) -> None:
+        """
+        Sends a SetMouse command to Kanata.
+
+        ⚠️ This command is not supported on Linux as of Kanata v1.8.1.
+        This method exists as a placeholder for future support.
+        """
+        x, y = pos
+        self._parse_json_response(self.send({"SetMouse": {"x": x, "y": y}}))
+
+    def _parse_json_response(self, response: Optional[str]) -> Dict[str, Any]:
+        if response:
+            try:
+                return json.loads(response)
+            except json.JSONDecodeError:
+                return {}
+        return {}
+
+
+# pylint: disable=too-few-public-methods
+class Config:
+    """Load and validate data configuration from a JSON file."""
+
+    def __init__(self, path: str, kanata: Kanata):
+        self._path = path
+        self._kanata = kanata
+        self.rules = self._load()
+        self._validate()
+
+    def _load(self) -> list[Rule]:
+        if os.path.exists(self._path):
+            try:
+                with open(self._path, "r", encoding="utf-8") as file:
+                    log.info("Loaded configuration file from '%s'", self._path)
+                    return json.load(file)
+            except json.JSONDecodeError as e:
+                fatal("Failed to decode JSON from '%s': %s", self._path, e)
+        else:
+            fatal("Configuration file not found: %s", self._path)
+
+    def _validate(self) -> None:
+        if not isinstance(self.rules, list):
+            fatal("Invalid config format: expected an array.")
+        allowed_rule_keys = {"class", "title", "layer", "fake_key", "set_mouse", "cmd"}
+        kanata_layers = self._kanata.get_layer_names()
+
+        for i, rule in enumerate(self.rules):
+            rule_no = i + 1
+            rule_fake_key = rule.get("fake_key")
+            rule_set_mouse = rule.get("set_mouse")
+
+            unexpected_rule_keys = rule.keys() - allowed_rule_keys
+            if unexpected_rule_keys:
+                fatal(
+                    "Invalid config: rule #%d contains unexpected keys(s): %s. "
+                    "Allowed keys: [%s].",
+                    rule_no,
+                    ", ".join(unexpected_rule_keys),
+                    ", ".join(allowed_rule_keys),
+                )
+
+            for key in ["class", "title", "layer", "cmd"]:
+                value = rule.get(key)
+                if value is False or value is None:
+                    continue
+                if not isinstance(value, str) or utils.is_blank(value):
+                    fatal(
+                        "Invalid config: key '%s' in rule #%d must be a non-empty "
+                        "string or set to false/null or be removed to disable it.",
+                        key,
+                        rule_no,
+                    )
+
+            if not isinstance(rule, dict) or not rule:
+                fatal(
+                    "Invalid config: rule #%d must be a non-empty JSON object "
+                    "(key-value pairs).",
+                    rule_no,
+                )
+
+            if rule_fake_key:
+                if not isinstance(rule_fake_key, list) or not all(
+                    isinstance(k, str) for k in rule_fake_key
+                ):
+                    fatal(
+                        "Invalid config: 'fake_key' in rule #%d must be an array of strings.",
+                        rule_no,
+                    )
+                utils.validate_fake_key(rule_fake_key, rule_no)
+
+            if rule_set_mouse and (
+                not isinstance(rule_set_mouse, list)
+                or not all(isinstance(k, int) for k in rule_set_mouse)
+            ):
+                fatal(
+                    "Invalid config: 'set_mouse' in rule #%d must be an array of integers.",
+                    rule_no,
+                )
+
+            layer = rule.get("layer")
+            if layer and layer not in kanata_layers:
+                fatal(
+                    "Invalid config: layer '%s' in rule #%d is not defined in your "
+                    "Kanata config. Use -l or --layers to list available layers.",
+                    layer,
+                    rule_no,
+                )
+
+        log.info("Configuration at '%s' is valid.", self._path)
+
+    def detect_rule(self, win_info) -> Optional[Rule]:
+        """
+        Resolve the appropriate rule based on active window information.
+
+        Matches the window's class and title against a set of predefined rules.
+        If a rule matches, it is returned. If no rules match, None is returned.
+        """
+
+        current_win_class = win_info.get("cls", "*")
+        current_win_title = win_info.get("title", "*")
+
+        def to_pattern(value):
+            return f".*{value}.*" if value != "*" else ".*"
+
+        for rule in self.rules:
+            pattern_class = to_pattern(rule.get("class", "*"))
+            pattern_title = to_pattern(rule.get("title", "*"))
+            log.debug(
+                "Evaluating rule: %s | Current window: {'class':'%s', 'title':'%s'}",
+                rule,
+                current_win_class,
+                current_win_title,
+            )
+
+            if re.match(pattern_class, current_win_class) and re.match(
+                pattern_title, current_win_title
+            ):
+                log.debug("Matching rule found: %s", rule)
+                return rule
+
+        log.debug("No matching rule found.")
+        return None
+
+
+class BaseWM:
+    """Base class for window manager/compositor implementations."""
+
+    def get_active_win(self) -> WinInfo:
+        """Return information about the active window; must be overridden."""
+        raise NotImplementedError("Implement in subclass")
+
+
+class WMBaseListener(BaseWM):
+    """
+    Base class handling window focus events.
+    Subclasses must implement `get_active_win` and `_setup_event_listener`.
+    """
+
+    def listen(self, kanata: Kanata, cfg: Config):
+        """Start listening for window focus changes and manage Kanata layer switching."""
+
+        last_win_title = None
+        last_win_class = None
+
+        def on_focus_event():
+            nonlocal last_win_title, last_win_class
+            win_info = self.get_active_win()
+            active_win_class = win_info["cls"]
+            active_win_title = win_info["title"]
+
+            if active_win_title != last_win_title or active_win_class != last_win_class:
+                log.info(
+                    "current_win: {'class':'%s', 'title':'%s'}",
+                    active_win_class,
+                    active_win_title,
+                )
+                matched_rule = cfg.detect_rule(win_info)
+
+                if matched_rule:
+                    last_win_title = active_win_title
+                    last_win_class = active_win_class
+                    rule_layer = matched_rule.get("layer")
+
+                    if not rule_layer:
+                        return
+                    ok = kanata.change_layer(rule_layer)
+
+                    if ok:
+                        rule_cmd = matched_rule.get("cmd")
+                        fake_key = matched_rule.get("fake_key")
+                        set_mouse = matched_rule.get("set_mouse")
+                        if rule_cmd:
+                            utils.run_cmd_bg(rule_cmd)
+                        if fake_key:
+                            kanata.act_on_fake_key(fake_key)
+                        if set_mouse:
+                            kanata.set_mouse(set_mouse)
+
+        self._setup_event_listener(on_focus_event)
+
+    def _setup_event_listener(self, on_focus_callback):
+        raise NotImplementedError("Implement in subclass")
+
+
+class Hyprland(WMBaseListener):
+    """
+    Interface for Hyprland IPC over UNIX sockets to track active window
+    and change Kanata layers.
+    """
+
+    def __init__(self):
+        self._soc = self._get_soc()
+        self._soc2 = self._get_soc2()
+        self._validate_sockets()
+
+    def _get_soc(self) -> str:
+        runtime_dir = utils.require_env("XDG_RUNTIME_DIR")
+        instance_sig = utils.require_env("HYPRLAND_INSTANCE_SIGNATURE")
+        return f"{runtime_dir}/hypr/{instance_sig}/.socket.sock"
+
+    def _get_soc2(self) -> str:
+        runtime_dir = utils.require_env("XDG_RUNTIME_DIR")
+        instance_sig = utils.require_env("HYPRLAND_INSTANCE_SIGNATURE")
+        return f"{runtime_dir}/hypr/{instance_sig}/.socket2.sock"
+
+    def _validate_sockets(self):
+        """Ensure both Hyprland socket paths exist."""
+        for path in [self._soc, self._soc2]:
+            if not os.path.exists(path):
+                fatal("Hyprland socket not found at %s", path)
+            log.debug("Hyprland socket path is valid: %s", path)
+
+    def get_active_win(self) -> WinInfo:
+        """Fetch class and title of the active window via Hyprland's JSON IPC."""
+        log.debug("Connecting to socket at %s", self._soc)
+
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+            sock.connect(self._soc)
+            sock.send(b"j/activewindow")
+            response = sock.recv(4096).decode("utf-8")
+
+        log.debug("Received response: %s", response)
+
+        try:
+            win_info = json.loads(response)
+        except json.JSONDecodeError:
+            log.warning("Failed to parse JSON from socket: %s", response)
+            return {"cls": "*", "title": "*"}
+
+        return {
+            "cls": win_info.get("class", "*"),
+            "title": win_info.get("title", "*"),
+        }
+
+    def _setup_event_listener(self, on_focus_callback):
+        log.debug("Listening for Hyprland events on socket: %s", self._soc2)
+
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+                sock.connect(self._soc2)
+                sock_file = sock.makefile("r")
+                for line in sock_file:
+                    event = line.strip()
+                    if event.startswith("activewindow>>"):
+                        on_focus_callback()
+        except FileNotFoundError:
+            fatal("Socket not found at: %s", self._soc2)
+        except ConnectionRefusedError:
+            fatal("Connection refused for socket: %s", self._soc2)
+
+
+class Sway(WMBaseListener):
+    """Sway interface using i3ipc to get active window info."""
+
+    def __init__(self):
+        try:
+            import i3ipc  # pylint: disable=import-outside-toplevel
+        except ImportError:
+            fatal("Missing dependency: i3ipc is required for Sway support.")
+
+        self.ipc = i3ipc.Connection()
+
+    def get_active_win(self) -> WinInfo:
+        focused = self.ipc.get_tree().find_focused()
+        if not focused:
+            return {"cls": "*", "title": "*"}
+        return {
+            "cls": focused.window_class or "*",
+            "title": focused.name or "*",  # type: ignore
+        }
+
+    def _setup_event_listener(self, on_focus_callback):
+        def handler(_ipc, _event):
+            on_focus_callback()
+
+        self.ipc.on("window::focus", handler)
+        self.ipc.main()
+
+
+@dataclass
+class Atoms:
+    """Stores X11 atom identifiers for commonly used window properties."""
+
+    NET_ACTIVE_WINDOW: int
+    NET_WM_NAME: int
+    WM_CLASS: int
+
+
+class X11(WMBaseListener):
+    """X11 interface using python-xlib to get active window info."""
+
+    def __init__(self):
+        # pylint: disable=import-outside-toplevel
+        try:
+            from Xlib import display, X
+            from Xlib.error import (
+                DisplayError,
+                XError,
+                BadWindow,
+                DisplayConnectionError,
+            )
+        except ImportError as exc:
+            fatal(
+                "Missing dependency: python-xlib is required for X11 support. (%s)", exc
+            )
+
+        self.X = X
+        self.errors = {
+            "DisplayError": DisplayError,
+            "XError": XError,
+            "BadWindow": BadWindow,
+            "DisplayConnectionError": DisplayConnectionError,
+        }
+
+        try:
+            self.disp = display.Display()
+        except DisplayError as e:
+            fatal("Failed to connect to X11 display: %s", e)
+
+        self.screen = self.disp.screen()
+        self.root = self.screen.root
+        self.atoms = Atoms(
+            NET_ACTIVE_WINDOW=self.disp.intern_atom("_NET_ACTIVE_WINDOW"),
+            NET_WM_NAME=self.disp.intern_atom("_NET_WM_NAME"),
+            WM_CLASS=self.disp.intern_atom("WM_CLASS"),
+        )
+        self.last_seen = {"xid": None}
+
+    def get_active_win(self) -> WinInfo:
+        try:
+            window_id_prop = self.root.get_full_property(
+                self.atoms.NET_ACTIVE_WINDOW, self.X.AnyPropertyType
+            )
+            if not window_id_prop or not window_id_prop.value:
+                return {"cls": "*", "title": "*"}
+            window_id = window_id_prop.value[0]
+            window = self.disp.create_resource_object("window", window_id)
+
+            title = "*"
+            title_prop = window.get_full_property(self.atoms.NET_WM_NAME, 0)
+            if title_prop and title_prop.value:
+                title = title_prop.value.decode("utf-8", errors="ignore")
+
+            cls = "*"
+            class_prop = window.get_full_property(self.atoms.WM_CLASS, 0)
+            if class_prop and class_prop.value:
+                class_data = class_prop.value.decode("utf-8", errors="ignore").split(
+                    "\x00"
+                )
+                if len(class_data) >= 2:
+                    cls = class_data[1]
+
+            return {"cls": cls, "title": title}
+        except (
+            self.errors["DisplayError"],
+            self.errors["XError"],
+            UnicodeDecodeError,
+            IndexError,
+        ) as e:
+            log.warning("Failed to get active window info: %s", e)
+            return WinInfo(cls="*", title="*")
+
+    def _setup_event_listener(self, on_focus_callback):
+        self.root.change_attributes(event_mask=self.X.PropertyChangeMask)
+        self.disp.flush()
+
+        while True:
+            try:
+                event = self.disp.next_event()
+                if (
+                    event.type == self.X.PropertyNotify
+                    and event.atom == self.errors["NET_ACTIVE_WINDOW"]
+                ):
+                    window_id_prop = self.root.get_full_property(
+                        self.errors["NET_ACTIVE_WINDOW"], self.X.AnyPropertyType
+                    )
+                    window_id = (
+                        window_id_prop.value[0]
+                        if window_id_prop and window_id_prop.value
+                        else None
+                    )
+                    if window_id != self.last_seen["xid"]:
+                        self.last_seen["xid"] = window_id
+                        on_focus_callback()
+            except (
+                self.errors["ConnectionError"],
+                self.errors["XError"],
+                self.errors["BadWindow"],
+                IndexError,
+            ) as e:
+                fatal("Error in event loop: %s", e)
+
+
+class Session:
+    """Manage the current window manager session."""
+
+    def __init__(self):
+        wm_name = self._detect_env()
+        if wm_name == "Hyprland":
+            self.wm = Hyprland()
+        elif wm_name == "Sway":
+            self.wm = Sway()
+        elif wm_name == "X11":
+            self.wm = X11()
+        else:
+            fatal("Unsupported or unknown WM: %s", wm_name)
+
+        log.debug("Session initialized with %s", wm_name)
+
+    @staticmethod
+    def _detect_env() -> str:
+        """Detect the current display environment."""
+
+        if os.environ.get("WAYLAND_DISPLAY"):
+            if "HYPRLAND_INSTANCE_SIGNATURE" in os.environ:
+                wm = "Hyprland"
+            elif "SWAYSOCK" in os.environ:
+                wm = "Sway"
+            else:
+                wm = "WaylandUnknown"
+        elif os.environ.get("DISPLAY"):
+            wm = "X11"
+        else:
+            wm = "Unknown"
+        log.debug("Detected environment: %s", wm)
+        return wm
+
+    def get_active_window(self):
+        """Return the active window info."""
+        return self.wm.get_active_win()
+
+
+class ColorFormatter(logging.Formatter):
+    """Formatter that adds ANSI color to log levels for terminal output."""
+
+    COLORS: dict[str, str] = {
+        # fmt: off
+        "DEBUG":    "\033[34m",  # Blue
+        "INFO":     "\033[32m",  # Green
+        "WARNING":  "\033[33m",  # Yellow
+        "ERROR":    "\033[31m",  # Red
+    }
+    RESET: str = "\033[0m"
+    BOLD: str = "\033[1m"
+
+    def format(self, record):
+        level = record.levelname
+        color = self.COLORS.get(level, "")
+        time_str = datetime.now().strftime("%H:%M:%S.%f")[:-3]  # HH:MM:SS.xxx
+        msg = record.getMessage()
+
+        return f"{time_str} {self.BOLD}{color}[{level}]{self.RESET} {msg}"
+
+
+def config_logger(
+    ll: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
+):
+    """Configure the logger to output to stdout with optional color if attached to a terminal."""
+
+    if log.hasHandlers():
+        log.handlers.clear()
+
+    level = getattr(logging, ll, logging.INFO)
+    log.setLevel(level)
+
+    handler = logging.StreamHandler(sys.stdout)
+
+    if sys.stdout.isatty():
+        formatter = ColorFormatter("%(message)s")
+    else:
+        formatter = logging.Formatter("%(message)s")
+
+    handler.setFormatter(formatter)
+    log.addHandler(handler)
+
+
+def fatal(message: str, *args: object) -> NoReturn:
+    """Log an error message and exit the program."""
+    log.error(message, *args)
+    sys.exit(1)
+
+
+def get_config_path() -> Path:
+    """Return the default path to the kanata apps.json config."""
+    home = os.getenv("HOME") or str(Path.home())
+    config_home = os.getenv("XDG_CONFIG_HOME")
+    base_path = Path(config_home) if config_home else Path(home) / ".config"
+    return base_path / "kanata" / "apps.json"
+
+
+def setup_signals(kanata):
+    """Register signal handlers for graceful shutdown."""
+
+    def handle_signal(signum, _frame):
+        name = signal.Signals(signum).name
+        log.warning("Received signal %s. Exiting gracefully...", name)
+        kanata.close()
+        sys.exit(1)
+
+    signal.signal(signal.SIGINT, handle_signal)  # Ctrl+C
+    signal.signal(signal.SIGTSTP, handle_signal)  # Ctrl+Z
+    signal.signal(signal.SIGTERM, handle_signal)  # kill
 
 
 def parse_args():
@@ -49,31 +816,85 @@ def parse_args():
         description="kanata Layer Switcher based on Hyprland window events."
     )
     parser.add_argument(
-        "-c",
-        "--config",
-        type=str,
-        default=DEFAULT_CONFIG_PATH,
-        help="Path to the JSON configuration file (default: ~/.config/kanata/apps.json)",
+        "--log-level",
+        type=str.upper,
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        default="WARNING",
+        help="Set logging level (default: WARNING)",
     )
     parser.add_argument(
         "-q",
         "--quiet",
         action="store_true",
-        help="Suppress non-essential output (only errors are shown)",
-    )
-    parser.add_argument(
-        "-p",
-        "--port",
-        type=str,
-        default="127.0.0.1:10000",
-        help="kanata server port (e.g., 10000) or full address "
-        "(e.g., 127.0.0.1:10000, default: 127.0.0.1:10000)",
+        help="Set logging level to ERROR (overrides --log)",
     )
     parser.add_argument(
         "-d",
         "--debug",
         action="store_true",
-        help="Enable debug mode",
+        help="Set logging level to DEBUG (overrides --log)",
+    )
+    parser.add_argument(
+        "--set-mouse",
+        nargs=2,
+        type=int,
+        metavar=("X", "Y"),
+        help="Set mouse position to (X, Y) and exit",
+    )
+    parser.add_argument(
+        "--current-layer-name",
+        action="store_true",
+        help="Print the current active Kanata layer and exit",
+    )
+    parser.add_argument(
+        "--current-layer-info",
+        action="store_true",
+        help="Print detailed info about the current active Kanata layer and exit",
+    )
+    parser.add_argument(
+        "--fake-key",
+        nargs=2,
+        metavar=("KEY_NAME", "ACTION"),
+        help=(
+            "Send ActOnFakeKey with (KEY, ACTION), where ACTION is one of: "
+            "Press, Release, Tap, Toggle."
+        ),
+    )
+    parser.add_argument(
+        "--change_layer",
+        metavar="LAYER",
+        help="Switch to the specified layer and exit.",
+    )
+    parser.add_argument(
+        "-l",
+        "--layers",
+        action="store_true",
+        help="Print kanata layers as JSON and exit.",
+    )
+    parser.add_argument(
+        "-p",
+        "--port",
+        type=utils.validate_port,
+        default="127.0.0.1:10000",
+        help="kanata server port (e.g., 10000) or full address (e.g., 127.0.0.1:10000",
+    )
+    parser.add_argument(
+        "-c",
+        "--config",
+        type=str,
+        default=get_config_path(),
+        metavar="PATH",
+        help="Path to the JSON configuration file (default: $XDG_CONFIG_HOME/apps.json)",
+    )
+    parser.add_argument(
+        "-w",
+        "--win",
+        type=int,
+        nargs="?",
+        const=0,
+        default=None,
+        metavar="SECONDS",
+        help="Print current window info and exit (optionally wait SECONDS before checking)",
     )
     parser.add_argument(
         "-v",
@@ -85,487 +906,46 @@ def parse_args():
     return parser.parse_args()
 
 
-def log(message, level="info"):
-    """Logs a message with a specified level (info, debug, warning, error); exits on 'error'."""
+def handle_cli_commands(args, kanata, session) -> bool:
+    """Handle one-off CLI commands and return True if a command was executed."""
 
-    levels = {
-        "info": f"{BLUE}[INFO]{RESET}",
-        "debug": f"{GREEN}[DEBUG]{RESET}",
-        "warning": f"{YELLOW}[WARN]{RESET}",
-        "error": f"{RED}[ERROR]{RESET}",
-        "layer_change": f"{GREEN}[LAYER]{RESET}",
-    }
-
-    log_level = levels.get(level, levels["info"])
-    current_time = datetime.now().strftime("%H:%M:%S.%f")[:-2]
-    formatted_message = f"{current_time} {log_level} {message}"
-
-    if level == "debug":
-        if args.debug:
-            print(formatted_message)
-    elif level == "error" or not args.quiet:
-        print(formatted_message)
-
-
-def parse_host_port(host_port: str):
-    """Parses 'host:port' or 'port', defaulting host to '192.168.1.1' if not provided."""
-    if ":" not in host_port:
-        host = "192.168.1.1"
-        port = int(host_port)
-        log(
-            f"No ':' found, defaulting to host: {host} and port: {port}",
-            "debug",
-        )
+    if args.layers:
+        print(kanata.get_layer_names())
+    elif args.change_layer:
+        kanata.change_layer(args.change_layer)
+    elif args.set_mouse:
+        kanata.set_mouse(args.set_mouse)
+    elif args.fake_key:
+        kanata.act_on_fake_key(args.fake_key)
+    elif args.current_layer_name:
+        print(kanata.get_current_layer_name())
+    elif args.current_layer_info:
+        print(kanata.get_current_layer_info())
+    elif args.win is not None:
+        sleep(args.win)
+        print(session.get_active_window())
     else:
-        host, port = host_port.rsplit(":", 1)
-        if not host:
-            host = "192.168.1.1"
-        port = int(port)
-        log(f"Parsed host: {host}, port: {port}", "debug")
-
-    log(f"kanata address is set to {YELLOW}{host}:{port}{RESET}")
-    return host, port
-
-
-def validate_port():
-    """
-    Validates if the input is a valid port number or an IP:PORT combination.
-    Raises a ValueError if the input is invalid.
-    """
-    port_pattern = re.compile(r"^(\d{1,5})$")
-    ip_port_pattern = re.compile(r"^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}):(\d{1,5})$")
-
-    log(f"Validating port: {args.port}", "debug")
-
-    port_match = port_pattern.fullmatch(args.port)
-    ip_port_match = ip_port_pattern.fullmatch(args.port)
-
-    def is_valid_port(port: str) -> bool:
-        """Check if the port is within the valid range."""
-        return port.isdigit() and 0 < int(port) <= 65535
-
-    if port_match:
-        log(f"Matched port number: {port_match.group(1)}", "debug")
-        if is_valid_port(port_match.group(1)):
-            log(f"Port {port_match.group(1)} is valid.", "debug")
-            return
-
-    if ip_port_match:
-        ip, port = ip_port_match.groups()
-        log(f"Matched IP:PORT - IP: {ip}, Port: {port}", "debug")
-        if is_valid_port(port):
-            octets = ip.split(".")
-            if all(0 <= int(octet) <= 255 for octet in octets):
-                log(f"IP address {ip} is valid.", "debug")
-                return
-
-    log(
-        f"Invalid value {RED}{args.port}{RESET} for {GREEN}--port{RESET} "
-        f"<{YELLOW}PORT{RESET} or {YELLOW}IP:PORT{RESET}>'.\n        "
-        f"Please specify either a port number, e.g. {YELLOW}8081{RESET}, or "
-        f"an address, e.g. {YELLOW}127.0.0.1:8081{RESET}.",
-        "error",
-    )
-    sys.exit(1)
-
-
-def validate_hyprland_sockets():
-    """Validate the paths to both Hyprland sockets based on HYPRLAND_INSTANCE_SIGNATURE."""
-    if not INSTANCE_SIG:
-        log("HYPRLAND_INSTANCE_SIGNATURE is not set.", "error")
-        sys.exit(1)
-
-    socket_paths = [HYPRLAND_SOCKET, HYPRLAND_SOCKET2]
-
-    for socket_path in socket_paths:
-        if not os.path.exists(socket_path):
-            log(f"Hyprland socket not found at {socket_path}", "error")
-            sys.exit(1)
-        log(f"Hyprland socket path is valid: {socket_path}", "debug")
-
-
-def validate_config():
-    """Validates the structure of the configuration file."""
-
-    allowed_top_keys = {"base", "exec", "rules"}
-    required_top_keys = {"rules"}
-
-    allowed_rule_keys = {"class", "title", "layer"}
-    required_rule_keys = {"layer"}
-
-    # Check for missing required top-level keys
-    missing_top_keys = required_top_keys - CONFIG.keys()
-    if missing_top_keys:
-        log(
-            f"Configuration file {YELLOW}{args.config}{RESET} is missing required field(s): "
-            f"{RED}{', '.join(missing_top_keys)}{RESET}.",
-            "error",
-        )
-        sys.exit(1)
-
-    # Check for unexpected top-level keys
-    unexpected_top_keys = CONFIG.keys() - allowed_top_keys
-    if unexpected_top_keys:
-        log(
-            f"Configuration file {YELLOW}{args.config}{RESET} contains unexpected field(s): "
-            f"{RED}{', '.join(unexpected_top_keys)}{RESET}. Allowed fields: "
-            f"{GREEN}{', '.join(allowed_top_keys)}{RESET}.",
-            "error",
-        )
-        sys.exit(1)
-
-    if not isinstance(CONFIG["rules"], list):
-        log(
-            f"'rules' in {YELLOW}{args.config}{RESET} must be a list of rule objects.",
-            "error",
-        )
-        sys.exit(1)
-
-    for rule in CONFIG["rules"]:
-        # Check for missing required rule keys
-        missing_rule_keys = required_rule_keys - rule.keys()
-        if missing_rule_keys:
-            log(
-                f"Rule in {YELLOW}{args.config}{RESET} is missing required field(s): "
-                f"{RED}{', '.join(missing_rule_keys)}{RESET}.",
-                "error",
-            )
-            sys.exit(1)
-
-        # Check for unexpected rule keys
-        unexpected_rule_keys = rule.keys() - allowed_rule_keys
-        if unexpected_rule_keys:
-            log(
-                f"Rule in {YELLOW}{args.config}{RESET} contains unexpected field(s): "
-                f"{RED}{', '.join(unexpected_rule_keys)}{RESET}. Allowed fields: "
-                f"{GREEN}{', '.join(allowed_rule_keys)}{RESET}.",
-                "error",
-            )
-            sys.exit(1)
-
-    log(f"Configuration {args.config} is valid.")
-
-
-def get_base_layer():
-    """Get the base layer from the configuration."""
-    log("Checking for base layer in configuration.", "debug")
-
-    if "base" in CONFIG:
-        base_layer = CONFIG["base"]
-        log(f"Found base layer: {YELLOW}{base_layer}{RESET}", "debug")
-        log(f"Base layer: {YELLOW}{base_layer}{RESET}")
-        return base_layer
-
-    log("No base layer found in configuration.", "debug")
-
-    log(
-        f"No base layer provided in the configuration file {YELLOW}{args.config}{RESET}",
-        "warning",
-    )
-    log(
-        "Without a base layer, the active layer won't change when switching "
-        "between apps that don't have a specific layer.",
-        "warning",
-    )
-    return None
-
-
-def get_cmd():
-    """Get the execution command from the configuration."""
-    log("Checking for base layer in configuration.", "debug")
-
-    if "exec" in CONFIG:
-        cmd = CONFIG["exec"]
-        log(f"Execution command found: {YELLOW}{cmd}{RESET}", "warning")
-        return cmd
-
-    log("No execution command found in configuration.", "debug")
-
-    return None
-
-
-def load_config():
-    """Load layer rules from a JSON file if it exists."""
-    if os.path.exists(args.config):
-        try:
-            with open(args.config, "r", encoding="utf-8") as file:
-                log(f"Loaded configuration file from {YELLOW}{args.config}{RESET}")
-                return json.load(file)
-        except json.JSONDecodeError as e:
-            log(
-                f"Failed to decode JSON from {YELLOW}{args.config}{RESET}: {e}",
-                "error",
-            )
-            sys.exit(1)
-    else:
-        log(f"Configuration file not found: {YELLOW}{args.config}{RESET}", "error")
-        sys.exit(1)
-
-
-def print_table(headers, rows):
-    """Print a dynamic table with headers and rows."""
-
-    if not args.debug:
-        return
-
-    # Calculate column widths based on the longest value in each column
-    column_widths = [
-        max(len(str(item)) for item in column) for column in zip(*rows, headers)
-    ]
-
-    # Print header
-    header_row = "  ".join(
-        f"{header:<{column_widths[i]}}" for i, header in enumerate(headers)
-    )
-    print(f"{'━' * len(header_row)}")
-    print(header_row)
-    print(f"{'━' * len(header_row)}")
-
-    # Print each row
-    for row in rows:
-        print("  ".join(f"{str(row[i]):<{column_widths[i]}}" for i in range(len(row))))
-    print(f"{'─' * len(header_row)}")
-
-
-def get_layer(win_info):
-    """Determine kanata layer based on window class and title."""
-
-    active_win_class = win_info.get("class", "*")
-    active_win_title = win_info.get("title", "*")
-
-    log(
-        f"Received window info: class='{active_win_class}', title='{active_win_title}'",
-        "debug",
-    )
-
-    headers = ["? Match", "Active Window", "Rule Information"]
-    rows = []
-
-    # Look for a specific match in the layers
-    for rule in CONFIG["rules"]:
-        rule_class = rule.get("class", "*")
-        rule_title = rule.get("title", "*")
-
-        if rule_class != "*":
-            rule_class = f".*{rule_class}.*"
-        if rule_title != "*":
-            rule_title = f".*{rule_title}.*"
-
-        class_match = rule_class == "*" or re.match(rule_class, active_win_class)
-        title_match = rule_title == "*" or re.match(rule_title, active_win_title)
-
-        if args.debug:
-            class_match_symbol = "✔" if class_match else "✘"
-            title_match_symbol = "✔" if title_match else "✘"
-
-            rows.append([f"{class_match_symbol} class", active_win_class, rule_class])
-            rows.append(
-                [f"{title_match_symbol} title", active_win_title, f"{rule_title}\n"]
-            )
-
-        log(f"Evaluating rule: {rule}", "debug")
-
-        if class_match and title_match:
-            print_table(headers, rows)
-            log(f"Matching rule found: {rule}", "debug")
-            return rule["layer"]
-
-    print_table(headers, rows)
-
-    base_layer = BASE_LAYER
-
-    if base_layer:
-        log(f"Resolved base layer: {base_layer}", "debug")
-        return base_layer
-
-    log("No base layer found. Returning None.", "debug")
-    return None
-
-
-def listen_for_events():
-    """Keep listening to the Hyprland socket and change kanata layer."""
-    last_win_title = None
-    last_layer = None
-
-    log(f"Listening for Hyprland events on socket: {YELLOW}{HYPRLAND_SOCKET2}{RESET}")
-
-    with subprocess.Popen(
-        ["socat", "-U", "-", f"UNIX-CONNECT:{HYPRLAND_SOCKET2}"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    ) as pipe:
-        while True:
-            event = pipe.stdout.readline().strip()
-            if not event:  # No new event received, continue listening
-                continue
-
-            active_win_info = fetch_active_win_info()
-            if active_win_info:
-                active_win_class = active_win_info["class"]
-                active_win_title = active_win_info["title"]
-
-                log(
-                    f"Extracted window info: class='{active_win_class}', "
-                    f"title='{active_win_title}'",
-                    "debug",
-                )
-
-                if active_win_title != last_win_title:
-                    current_layer = get_layer(active_win_info)
-                    log(
-                        f"Determined layer: {current_layer} (previous: {last_layer})",
-                        "debug",
-                    )
-
-                    if current_layer and current_layer != last_layer:
-                        last_win_title = active_win_title
-                        last_layer = current_layer
-
-                        if switch_layer(current_layer):
-                            os.environ["CURRENT_LAYER"] = current_layer
-                            run_subprocess()
-
-            else:
-                log("Failed to extract window info from event", "debug")
-
-
-def switch_layer(new_layer):
-    """Switch the kanata layer by sending a command to the kanata TCP server."""
-
-    try:
-        log(f"Attempting to switch layer to '{new_layer}'...", "debug")
-
-        # Create a TCP socket and connect to the kanata server
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
-            log(
-                f"Debug: Connecting to kanata server at {kanata_HOST}:{kanata_PORT}...",
-                "debug",
-            )
-
-            client.settimeout(5)
-
-            try:
-                client.connect((kanata_HOST, kanata_PORT))
-                log("Debug: Successfully connected to kanata server.", "debug")
-            except socket.timeout:
-                log("kanata Error: Connection attempt timed out.", "error")
-                return False
-            except socket.error as e:
-                log(f"kanata Error: Connection failed: {e}", "error")
-                return False
-
-            command = f'{{"ChangeLayer":{{"new":"{new_layer}"}}}}\n'
-            log(f"Sending command: {command}", "debug")
-
-            sent = client.send(command.encode("utf-8"))
-
-            if sent == 0:
-                log("kanata Error: Failed to send layer switch command", "error")
-                return False
-
-            log("Debug: Command sent successfully.", "debug")
-
-            # Shutdown the connection after sending the command
-            client.shutdown(socket.SHUT_WR)
-            log("Debug: Shutdown the socket for writing.", "debug")
-
-            # Delay to prevent server from crashing due to fast closure
-            time.sleep(0.1)
-
-    except socket.error as e:
-        log(f"kanata Error: {e}", "error")
         return False
-
-    log(f"Switched layer to {YELLOW}{new_layer}{RESET}.")
     return True
 
 
-def fetch_active_win_info():
-    """Fetch and return the class and title of the active window from Hyprland socket."""
-
-    log(f"Connecting to socket at {HYPRLAND_SOCKET}", "debug")
-
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
-        sock.connect(HYPRLAND_SOCKET)
-        log("Connected to socket successfully", "debug")
-
-        command = "j/activewindow"  # JSON output for activewindow
-        log(f"Sending command: {command}", "debug")
-
-        sock.send(command.encode("utf-8"))
-        response = sock.recv(4096).decode("utf-8")
-
-        log(f"Received response: {response}", "debug")
-
-        win_info = json.loads(response)
-
-        class_name = win_info.get("class", "*")
-        title = win_info.get("title", "*")
-
-        log(f"Extracted class: {class_name}, title: {title}", "debug")
-
-        return {"class": class_name, "title": title}
-
-
-def run_subprocess():
-    """Execute the global CMD command in background."""
-
-    def background_task():
-        if CMD:
-            try:
-                subprocess.run(
-                    CMD, shell=True, capture_output=True, text=True, check=True
-                )
-            except subprocess.CalledProcessError as e:
-                log(f"Error occurred while running command: {e}", "error")
-                log(f"{e.stderr}", "error")
-                sys.exit(1)
-
-    # Create and start a background thread
-    thread = threading.Thread(target=background_task)
-    thread.start()
-
-
 def main():
-    """Main function to handle argument parsing and logic."""
-    global args, kanata_HOST, kanata_PORT, CONFIG, BASE_LAYER, CMD
-
     args = parse_args()
-    kanata_PORT = args.port
+    ll = "ERROR" if args.quiet else "DEBUG" if args.debug else args.log_level
 
-    validate_port()
+    config_logger(ll)
 
-    kanata_HOST, kanata_PORT = parse_host_port(args.port)
-    CONFIG = load_config()
+    session = Session()
+    kanata = Kanata(args.port)
+    cfg = Config(args.config, kanata)
 
-    validate_config()
+    setup_signals(kanata)
 
-    BASE_LAYER = get_base_layer()
-    CMD = get_cmd()
+    if handle_cli_commands(args, kanata, session):
+        return
 
-    validate_hyprland_sockets()
-    listen_for_events()
+    session.wm.listen(kanata, cfg)
 
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
