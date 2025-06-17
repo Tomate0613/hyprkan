@@ -1,123 +1,101 @@
-# hyprkan ⌨️
+[![Ceasefire Now](https://badge.techforpalestine.org/default)](https://techforpalestine.org/learn-more)
 
-**hyprkan** is a layer switcher for [kanata](https://github.com/jtroo/kanata) that works exclusively on [Hyprland](https://hyprland.org). It listens to [Hyprland events](https://wiki.hyprland.org/IPC), detects active windows, and switches the kanata layer based on window class and title using a JSON configuration.
+# Hyprkan ⌨️
 
-> [!WARNING]
-> Please be aware that **hyprkan** is currently in its beta version. As such, it may contain bugs that have not yet been identified or resolved.
+A Linux app-aware layer switcher that dynamically changes [Kanata](https://github.com/jtroo/kanata)'s keyboard layers based on the focused window.
 
 ## Table of Contents
 
+- [Features](#features)
+- [Supported Environments](#supported-environments)
+- [Installation](#installation)
 - [Usage](#usage)
-  - [hyprkan Service](#setting-up-as-a-service)
-- [Configuration](#configuration)
-  - [Properties](#config-properties)
-  - [Example](#config-example)
-- [hyprkan Options](#hyprkan-options)
+- [Options](#options)
+
+## Features
+
+- App-aware Kanata layer switching based on window class or title.
+- Execute shell commands when specific applications gain focus.
+- Send [virtual keys](https://jtroo.github.io/config.html#virtual-keys) to automate input behavior.
+- Move mouse to specific position _(Kanata Linux support pending)_.
+
+## Supported Environments
+
+- X11
+- Wayland ([Hyprland](https://wiki.hypr.land), [Sway](https://swaywm.org))
+
+## Installation
+
+Download [hyprkan](src/hyprkan.py) script and make it executable: `chmod +x hyprkan.py`
+
+### Dependencies:
+
+- python >= 3.8
+- [kanata](https://github.com/jtroo/kanata) >= 1.8.1
+- [i3ipc](https://pypi.org/project/i3ipc/) (for Sway support)
+- [python-xlib](https://pypi.org/project/python-xlib/) (for X11 support)
+
+### Add hyprkan to your PATH (Optional)
+
+To run hyprkan from anywhere, see: [docs/setup-path](docs/setup-path.md)
+
+### Setting Up as a Service (Optional)
+
+To run hyprkan automatically, see: [docs/service](docs/service.md)
 
 ## Usage
 
-After downloading [hyprkan](/hyprkan):
+After downloading hyprkan:
 
-1. Ensure that kanata is running and configured correctly.
-2. Set your rules in the [configuration file](#configuration).
-3. Now you can run hyprkan.
+1. Ensure that Kanata is running as a TCP server with the `-p` option (e.g., `-p 10000`) enabled and properly configured.
+2. Set your app rules in the [configuration file](docs/config.md).
+3. Run hyprkan using the same port number: `hyprkan -p 10000`
 
-> [!IMPORTANT]
-> Make sure hyprkan is executable:
->
-> ```bash
-> chmod +x hyprkan
-> ```
-
-### Setting Up as a Service
-
-To run hyprkan automatically, you can set it up as a [systemd service](https://en.wikipedia.org/wiki/Systemd).
-
-Create a systemd user service file at `~/.config/systemd/user/hyprkan.service` with the following content:
-
-```ini
-[Unit]
-Description=Kanata Layer Switcher
-After=graphical-session.target
-
-[Service]
-ExecStart=%h/.local/bin/hyprkan
-Restart=on-failure
-RestartSec=5
-Type=simple
-
-[Install]
-WantedBy=graphical-session.target
-```
-
-> [!NOTE]
-> Make sure to replace `%h/.local/bin/hyprkan` with the correct path to the hyprkan file.
-
-1. Start the service:
-
-   ```bash
-   systemctl --user start hyprkan
-   ```
-
-2. Enable the service to start automatically on boot:
-
-   ```bash
-   systemctl --user enable hyprkan
-   ```
-
-3. Check the status of the service:
-   ```bash
-   systemctl --user status hyprkan
-   ```
-
-## Configuration
-
-The configuration file is a [JSON](https://en.wikipedia.org/wiki/JSON) file where you define window rules and the corresponding kanata layers. The default configuration file is located at: `~/.config/kanata/apps.json`
-
-### Config Properties
-
-Here are the properties you can include in the configuration file:
-
-- `base`: The base layer used as a fallback when no specific rule matches the current app.
-- `exec`: Bash commands to execute every time the kanata layer switches.
-  This can be useful if you want to send a notification when the layer changes. For example, you can use `notify-send -r 12345 'Current Layer' $CURRENT_LAYER`.
-  `CURRENT_LAYER` is an environment variable you can use to get the current layer's name.
-- `rules`: A set of rules that define which layer to switch to based on the active window's class or title. See [nata's window rules](https://github.com/mdSlash/nata/blob/main/docs/config.md#window_rules) for more information.
-
-### Config Example
-
-Here is an example structure for the configuration file:
-
-```json
-{
-  "base": "BaseLayer",
-  "exec": "notify-send $CURRENT_LAYER",
-  "rules": [
-    {
-      "class": "ExampleClass",
-      "title": "ExampleTitle",
-      "layer": "ExampleLayer"
-    }
-  ]
-}
-```
-
-## hyprkan Options
+## Options
 
 Here is a list of available options:
 
-- `-h`, `--help`
-  Display the help message and exit
-- `-c`, `--config`
-  Path to the JSON configuration file (default: `~/.config/kanata/apps.json`)
-- `-q`, `--quiet`
-  Suppress non-essential output (only errors are shown)
-- `-p`, `--port`
-  kanata server port (e.g., `10000`) or full address (e.g., `127.0.0.1:10000`, default: `127.0.0.1:10000`)
-- `-d`, `--debug`
-  Enable debug mode
-- `-v`, `--version`
-  Show hyprkan version
+- `-h, --help`  
+  Show this help message and exit
 
-> [!IMPORTANT]
-> Ensure that the specified port or full address match those used by kanata to avoid connection issues.
+- `--log-level {DEBUG,INFO,WARNING,ERROR}`  
+  Set logging level (default: WARNING)
+
+- `-q, --quiet`  
+  Set logging level to ERROR (overrides `--log`)
+
+- `-d, --debug`  
+  Set logging level to DEBUG (overrides `--log`)
+
+- `--set-mouse X Y`
+
+  > **⚠️ Warning:**  
+  > This command is not supported on Linux as of Kanata v1.8.1.  
+  > This method exists as a placeholder for future support.
+
+- `--current-layer-name`  
+  Print the current active Kanata layer and exit
+
+- `--current-layer-info`  
+  Print detailed info about the current active Kanata layer and exit
+
+- `--fake-key KEY_NAME ACTION`  
+  Send ActOnFakeKey with (KEY, ACTION), where ACTION is one of: Press, Release, Tap, Toggle.
+
+- `--change_layer LAYER`  
+  Switch to the specified layer and exit
+
+- `-l, --layers`  
+  Print kanata layers as JSON and exit
+
+- `-p, --port PORT`  
+  Kanata server port (e.g., 10000) or full address (e.g., 127.0.0.1:10000)
+
+- `-c, --config PATH`  
+  Path to the JSON configuration file (default: `$XDG_CONFIG_HOME/apps.json`)
+
+- `-w, --win [SECONDS]`  
+  Print current window info and exit (optionally wait SECONDS before checking)
+
+- `-v, --version`  
+  Show hyprkan version
