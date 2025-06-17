@@ -71,7 +71,6 @@ Here is a list of available options:
 
   > **⚠️ Warning:**  
   > This command is not supported on Linux as of Kanata v1.8.1.  
-  > This method exists as a placeholder for future support.
 
 - `--current-layer-name`  
   Print the current active Kanata layer and exit
