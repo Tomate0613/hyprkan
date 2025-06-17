@@ -850,7 +850,7 @@ def parse_args():
         ),
     )
     parser.add_argument(
-        "--change_layer",
+        "--change-layer",
         metavar="LAYER",
         help="Switch to the specified layer and exit.",
     )
