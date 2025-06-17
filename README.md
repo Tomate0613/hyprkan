@@ -98,3 +98,9 @@ Here is a list of available options:
 
 - `-v, --version`  
   Show hyprkan version
+
+### ⚠️ Note on Performance
+
+These options create a new TCP connection each time and are not suited for repeated use: `--change-layer`, `--layers`, `--current-layer-name`, `--current-layer-info`, `--set-mouse`, and `--fake-key`.
+
+Use them only for debugging or one-off tasks. For performance, prefer event-based switching.
