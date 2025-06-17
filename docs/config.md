@@ -52,7 +52,7 @@ Let’s say you want to automatically switch to a specific Kanata layer when the
 
 ## Matching Behavior
 
-Each rule matches a window based on its class and optional title.
+Each rule matches a window based on its class and title.
 
 - `"class"` and `"title"` use **regular expressions**
 
