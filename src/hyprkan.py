@@ -845,10 +845,8 @@ def parse_args():
         "--fake-key",
         nargs=2,
         metavar=("KEY_NAME", "ACTION"),
-        help=(
-            "Send ActOnFakeKey with (KEY, ACTION), where ACTION is one of: "
-            "Press, Release, Tap, Toggle."
-        ),
+        help="Trigger a virtual key's action and exit. ACTION must be one of: "
+        "Press, Release, Tap, Toggle.",
     )
     parser.add_argument(
         "--change-layer",
