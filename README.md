@@ -48,7 +48,7 @@ To run hyprkan automatically, see: [docs/service](docs/service.md)
 After downloading hyprkan:
 
 1. Ensure that Kanata is running as a TCP server with the `-p` option (e.g., `-p 10000`) enabled and properly configured.
-2. Set your app rules in the [configuration file](docs/config.md).
+2. Set your app rules in the [configuration](docs/config.md) file.
 3. Run hyprkan using the same port number: `hyprkan -p 10000`
 
 ## Options
