@@ -1,7 +1,26 @@
 [
-  {
-    "class": "ExampleClass",
-    "title": "ExampleTitle",
-    "layer": "ExampleLayer"
-  // <-- Expected comma 
+  [
+    [{"invalid_key": "value"}],
+    "contains unexpected keys(s)"
+  ],
+  [
+    [{"class": ""}],
+    "must be a non-empty string"
+  ],
+  [
+    [{}],
+    "must be a non-empty JSON object"
+  ],
+  [
+    [{"fake_key": [123]}],
+    "must be an array of strings"
+  ],
+  [
+    [{"set_mouse": ["left", "right"]}],
+    "must be an array of integers"
+  ],
+  [
+    [{"layer": "nonexistent"}],
+    "layer 'nonexistent' in rule #1 is not defined"
+  ]
 ]
