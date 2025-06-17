@@ -1,0 +1,21 @@
+[
+  { "class": "*", "title": "ChatGPT", "layer": "ai_mode" },
+
+  { "class": "code-oss", "title": "*", "layer": "vs_code" },
+
+  { "class": "*", "title": "index.html - Code - OSS", "layer": "lang_html" },
+
+  { "title": "style.css - Code - OSS", "layer": "lang_css" },
+  { "class": false, "title": "VLC media player", "layer": null },
+  { "class": "Steam", "title": "Library", "layer": "gaming" },
+  { "class": "Inkscape", "title": "New document", "fake_key": ["esc", "tap"] },
+  { "class": "Vivaldi", "title": "*", "layer": false },
+  { "class": "^obs$", "layer": "streaming" },
+  { "title": "^Mozilla" },
+  {
+    "class": "nvim",
+    "title": "nvim - \\[Scratch]",
+    "layer": "vim_scratch"
+  },
+  { "class": "*", "title": "*", "layer": "base_layer" }
+]
