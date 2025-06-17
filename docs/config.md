@@ -31,8 +31,8 @@ The config is a list of rules. Each rule can include:
 - `"title"` Window title
 - `"layer"`: Kanata layer to change to
 - `"cmd"`: Shell command to execute
-- `"fake_key"`: Kanata virtual key to trigger
-- `"set_mouse"`: Mouse position to set (e.g. `"500 300"`)
+- `"fake_key"`: Kanata virtual key to trigger (e.g. `["esc", "tap"]`)
+- `"set_mouse"`: Mouse position to set (e.g. `[300, 400]`)
 
 ## Adding a New Rule
 
