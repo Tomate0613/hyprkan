@@ -1,0 +1,7 @@
+[
+  {
+    "class": "ExampleClass",
+    "title": "ExampleTitle",
+    "layer": "ExampleLayer"
+  // <-- Expected comma 
+]
