@@ -11,6 +11,7 @@ A Linux app-aware layer switcher that dynamically changes [Kanata](https://githu
 - [Installation](#installation)
 - [Usage](#usage)
 - [Options](#options)
+- [Similar Projects](#similar-projects)
 
 ## Features
 
