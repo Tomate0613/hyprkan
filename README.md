@@ -58,8 +58,8 @@ After downloading hyprkan:
 | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
 | `-h`, `--help`                           | Show this help message and exit                                                                                |
 | `--log-level {DEBUG,INFO,WARNING,ERROR}` | Set logging level (default: `WARNING`)                                                                         |
-| `-q`, `--quiet`                          | Set logging level to ERROR                                                                                     |
-| `-d`, `--debug`                          | Set logging level to DEBUG                                                                                     |
+| `-q`, `--quiet`                          | Set logging level to `ERROR`                                                                                   |
+| `-d`, `--debug`                          | Set logging level to `DEBUG`                                                                                   |
 | `--set-mouse X Y`                        | Set mouse position to (`X`, `Y`) and exit <br> ⚠️ This option is not supported on Linux as of Kanata `v1.8.1`. |
 | `--current-layer-name`                   | Print the current active Kanata layer and exit                                                                 |
 | `--current-layer-info`                   | Print detailed info about the current active Kanata layer and exit                                             |
