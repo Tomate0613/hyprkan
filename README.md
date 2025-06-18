@@ -104,3 +104,14 @@ Here is a list of available options:
 These options create a new TCP connection each time and are not suited for repeated use: `--change-layer`, `--layers`, `--current-layer-name`, `--current-layer-info`, `--set-mouse`, and `--fake-key`.
 
 Use them only for debugging or one-off tasks. For performance, prefer event-based switching.
+
+## Similar Projects
+
+- Linux
+  - [nata](https://github.com/mdSlash/nata)
+  - [qanata](https://github.com/veyxov/qanata)
+- macOS
+  - [kanata-vk-agent](https://github.com/devsunb/kanata-vk-agent)
+- Windows
+  - [komokana](https://github.com/LGUG2Z/komokana)
+  - [kanawin](https://github.com/Aqaao/kanawin)
