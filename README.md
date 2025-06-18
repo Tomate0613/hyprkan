@@ -54,51 +54,22 @@ After downloading hyprkan:
 
 ## Options
 
-Here is a list of available options:
-
-- `-h, --help`  
-  Show this help message and exit
-
-- `--log-level {DEBUG,INFO,WARNING,ERROR}`  
-  Set logging level (default: `WARNING`)
-
-- `-q, --quiet`  
-  Set logging level to ERROR (overrides `--log`)
-
-- `-d, --debug`  
-  Set logging level to DEBUG (overrides `--log`)
-
-- `--set-mouse X Y`
-  Set mouse position to (X, Y) and exit
-
-  > **⚠️ Warning:** This option is not supported on Linux as of Kanata v1.8.1.
-
-- `--current-layer-name`  
-  Print the current active Kanata layer and exit
-
-- `--current-layer-info`  
-  Print detailed info about the current active Kanata layer and exit
-
-- `--fake-key KEY_NAME ACTION`  
-  Trigger a [virtual key](https://jtroo.github.io/config.html#virtual-keys) action and exit
-
-- `--change-layer LAYER`  
-  Switch to the specified layer and exit
-
-- `-l, --layers`  
-  Print kanata layers as JSON and exit
-
-- `-p, --port PORT`  
-  Kanata server port (e.g., `10000`) or full address (e.g., 127.0.0.1:`10000`)
-
-- `-c, --config PATH`  
-  Path to the JSON configuration file (default: `$XDG_CONFIG_HOME/kanata/apps.json`)
-
-- `-w, --current-window-info [SECONDS]`  
-  Print current window info and exit (optionally wait SECONDS before checking)
-
-- `-v, --version`  
-  Show hyprkan version
+| Option                                   | Description                                                                                                    |
+| ---------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `-h`, `--help`                           | Show this help message and exit                                                                                |
+| `--log-level {DEBUG,INFO,WARNING,ERROR}` | Set logging level (default: `WARNING`)                                                                         |
+| `-q`, `--quiet`                          | Set logging level to ERROR                                                                                     |
+| `-d`, `--debug`                          | Set logging level to DEBUG                                                                                     |
+| `--set-mouse X Y`                        | Set mouse position to (`X`, `Y`) and exit <br> ⚠️ This option is not supported on Linux as of Kanata `v1.8.1`. |
+| `--current-layer-name`                   | Print the current active Kanata layer and exit                                                                 |
+| `--current-layer-info`                   | Print detailed info about the current active Kanata layer and exit                                             |
+| `--fake-key KEY_NAME ACTION`             | Trigger a virtual key action and exit                                                                          |
+| `--change-layer LAYER`                   | Switch to the specified layer and exit                                                                         |
+| `-l`, `--layers`                         | Print kanata layers as JSON and exit                                                                           |
+| `-p`, `--port PORT`                      | Kanata server port (e.g., `10000`) or full address (e.g., `127.0.0.1:10000`)                                   |
+| `-c`, `--config PATH`                    | Path to the JSON configuration file (default: `$XDG_CONFIG_HOME/kanata/apps.json`)                             |
+| `-w`, `--current-window-info [SECONDS]`  | Print current window info and exit (optionally wait SECONDS before checking)                                   |
+| `-v`, `--version`                        | Show hyprkan version                                                                                           |
 
 ### ⚠️ Note on Performance
 
