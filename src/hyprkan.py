@@ -45,7 +45,7 @@ from pathlib import Path
 from typing import Literal, NoReturn, Optional, TypedDict, Tuple, Dict, Any, Union
 
 
-SCRIPT_VERSION = "2.0.0"
+SCRIPT_VERSION = "2.1.0"
 
 
 log = logging.getLogger()
