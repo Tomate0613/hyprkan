@@ -23,7 +23,10 @@ A Linux app-aware layer switcher that dynamically changes [Kanata](https://githu
 ## Supported Environments
 
 - X11
-- Wayland ([Hyprland](https://wiki.hypr.land), [Sway](https://swaywm.org))
+- Wayland
+  - [Hyprland](https://wiki.hypr.land)
+  - [Sway](https://swaywm.org)
+  - [Niri](https://github.com/YaLTeR/niri)
 
 ## Installation
 

@@ -547,6 +547,78 @@ class Hyprland(WMBaseListener):
             fatal("Connection refused for socket: %s", self._soc2)
 
 
+class Niri(WMBaseListener):
+    """
+    Interface for Niri IPC over UNIX sockets to track active window.
+    """
+
+    def __init__(self):
+        self._soc = utils.require_env("NIRI_SOCKET")
+
+    def get_active_win(self) -> WinInfo:
+        """Fetch class and title of the focused window via Niri's JSON IPC."""
+        log.debug("Connecting to Niri socket at %s", self._soc)
+
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+            sock.connect(self._soc)
+            request = json.dumps({"Windows": None}) + "\n"
+            sock.sendall(request.encode())
+
+            response = sock.makefile().readline()
+            log.debug("Received response: %s", response)
+
+            try:
+                data = json.loads(response)
+            except json.JSONDecodeError:
+                log.warning("Failed to parse JSON from Niri socket")
+                return {"cls": "*", "title": "*"}
+
+            ok = data.get("Ok")
+            if not isinstance(ok, dict):
+                log.warning("Expected dict in 'Ok', got: %s", type(ok).__name__)
+                return {"cls": "*", "title": "*"}
+
+            windows = ok.get("Windows", [])
+            for win in windows:
+                if win.get("is_focused", False):
+                    return {
+                        "cls": win.get("app_id", "*"),
+                        "title": win.get("title", "*"),
+                    }
+
+        return {"cls": "*", "title": "*"}
+
+    def _setup_event_listener(self, on_focus_callback):
+        log.debug("Listening for Niri events on socket: %s", self._soc)
+
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+                sock.connect(self._soc)
+                sock_file = sock.makefile("r")
+
+                request = json.dumps({"EventStream": None}) + "\n"
+                sock.sendall(request.encode())
+
+                for line in sock_file:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        event = json.loads(line)
+                    except json.JSONDecodeError:
+                        log.warning("Failed to decode event JSON: %s", line)
+                        continue
+
+                    if "WindowFocusChanged" in event:
+                        log.debug("Focus changed event: %s", event)
+                        on_focus_callback()
+
+        except FileNotFoundError:
+            fatal("Niri socket not found at: %s", self._soc)
+        except ConnectionRefusedError:
+            fatal("Connection refused for socket: %s", self._soc)
+
+
 class Sway(WMBaseListener):
     """Sway interface using i3ipc to get active window info."""
 
@@ -698,6 +770,8 @@ class Session:
             self.wm = Hyprland()
         elif wm_name == "Sway":
             self.wm = Sway()
+        elif wm_name == "Niri":
+            self.wm = Niri()
         elif wm_name == "X11":
             self.wm = X11()
         else:
@@ -714,6 +788,8 @@ class Session:
                 wm = "Hyprland"
             elif "SWAYSOCK" in os.environ:
                 wm = "Sway"
+            elif "NIRI_SOCKET" in os.environ:
+                wm = "Niri"
             else:
                 wm = "WaylandUnknown"
         elif os.environ.get("DISPLAY"):
