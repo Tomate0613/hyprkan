@@ -35,7 +35,7 @@ Steps to reproduce the behavior:
 
 **Relevant Kanata and Hyprkan config**
 
-<!-- Paste relevant parts of your Kanata or Hyprkan confi files -->
+<!-- Paste relevant parts of your Kanata or Hyprkan confid files -->
 
 **Additional context**
 
