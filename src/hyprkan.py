@@ -7,11 +7,6 @@ This script acts as an application-aware keyboard layer switcher for Kanata.
 It monitors the currently focused window and dynamically adjusts Kanata's
 keyboard layer based on the window's class and title.
 
-Supported Environments:
-- Hyprland (Wayland)
-- Sway (Wayland, via i3ipc)
-- X11-based window managers (via python-xlib)
-
 Core Features:
 - Per-app Kanata layer switching
 - Run shell commands on window focus
