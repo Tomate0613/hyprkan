@@ -85,6 +85,13 @@ class utils:
         )
 
     @staticmethod
+    def positive_int(value):
+        ivalue = int(value)
+        if ivalue < 0:
+            fatal(f"Expected non-negative integer, got '{value}'")
+        return ivalue
+
+    @staticmethod
     def _is_valid_port(port: Union[int, str]) -> bool:
         if isinstance(port, int):
             return 0 < port <= 65535
@@ -948,7 +955,7 @@ def parse_args():
     parser.add_argument(
         "-w",
         "--current-window-info",
-        type=int,
+        type=utils.positive_int,
         nargs="?",
         const=0,
         default=None,
