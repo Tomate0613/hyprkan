@@ -627,7 +627,7 @@ class Sway(WMBaseListener):
         if not focused:
             return {"cls": "*", "title": "*"}
         return {
-            "cls": focused.window_class or "*",
+            "cls": focused.app_id or focused.window_class or "*",
             "title": focused.name or "*",  # type: ignore
         }
 
