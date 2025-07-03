@@ -563,7 +563,7 @@ class Niri(WMBaseListener):
 
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
             sock.connect(self._soc)
-            request = json.dumps({"Windows": None}) + "\n"
+            request = json.dumps({"FocusedWindow": None}) + "\n"
             sock.sendall(request.encode())
 
             response = sock.makefile().readline()
@@ -571,24 +571,14 @@ class Niri(WMBaseListener):
 
             try:
                 data = json.loads(response)
-            except json.JSONDecodeError:
-                log.warning("Failed to parse JSON from Niri socket")
+                focused = data["Ok"]["FocusedWindow"]
+                return {
+                    "cls": focused.get("app_id", "*"),
+                    "title": focused.get("title", "*"),
+                }
+            except (KeyError, json.JSONDecodeError) as e:
+                log.warning("Failed to get focused window info: %s", e)
                 return {"cls": "*", "title": "*"}
-
-            ok = data.get("Ok")
-            if not isinstance(ok, dict):
-                log.warning("Expected dict in 'Ok', got: %s", type(ok).__name__)
-                return {"cls": "*", "title": "*"}
-
-            windows = ok.get("Windows", [])
-            for win in windows:
-                if win.get("is_focused", False):
-                    return {
-                        "cls": win.get("app_id", "*"),
-                        "title": win.get("title", "*"),
-                    }
-
-        return {"cls": "*", "title": "*"}
 
     def _setup_event_listener(self, on_focus_callback):
         log.debug("Listening for Niri events on socket: %s", self._soc)
